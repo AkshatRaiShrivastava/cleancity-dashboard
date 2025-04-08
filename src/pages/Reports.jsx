@@ -127,7 +127,7 @@ const Reports = () => {
                           <p className="font-medium text-green-600 truncate">{report.id || "Untitled Report"}</p>
                         </div>
                         <div className="mt-1 flex items-center text-sm text-gray-500">
-                          <p className="truncate">{report.location?.address || "No address provided"}</p>
+                          <p className="truncate">{report.longitude + ", " +report.latitude || "No address provided"}</p>
                         </div>
                       </div>
                       <div className="ml-2 flex-shrink-0 flex">
@@ -137,7 +137,7 @@ const Reports = () => {
                     <div className="mt-2 sm:flex sm:justify-between">
                       <div className="sm:flex">
                         <p className="flex items-center text-sm text-gray-500">
-                          Reported by: {report.userName || "Anonymous"}
+                          Reported by: {report.userId || "Anonymous"}
                         </p>
                       </div>
                       <div className="mt-2 flex items-center text-sm text-gray-500 sm:mt-0">

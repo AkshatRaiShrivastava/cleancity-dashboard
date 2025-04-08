@@ -2,7 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { getReportById, updateReport } from "../firebase/services";
+import {
+  getReportById,
+  updateReport,
+  REPORT_STATUSES,
+  getUserById,
+} from "../firebase/services";
 import StatusBadge from "../components/StatusBadge";
 import { auth } from "../firebase/config";
 
@@ -17,6 +22,7 @@ const ReportDetail = () => {
   const [newComment, setNewComment] = useState("");
   const [updating, setUpdating] = useState(false);
   const [commentLoading, setCommentLoading] = useState(false);
+  const [reportUser, setReportUser] = useState(null);
 
   useEffect(() => {
     const fetchReportData = async () => {
@@ -26,6 +32,12 @@ const ReportDetail = () => {
         setReport(reportData);
         setNewStatus(reportData.status);
         setComments(reportData.comments || []);
+
+        // Fetch user details if userId exists
+        if (reportData.userId) {
+          const userData = await getUserById(reportData.userId);
+          setReportUser(userData);
+        }
       } catch (error) {
         console.error("Error fetching report:", error);
         setError("Failed to load report. Please try again.");
@@ -40,13 +52,68 @@ const ReportDetail = () => {
   const handleStatusUpdate = async () => {
     try {
       setUpdating(true);
-      await updateReport(id, { status: newStatus });
-      setReport((prev) => ({ ...prev, status: newStatus }));
+      const statusDescription = getStatusDescription(newStatus);
+      await updateReport(id, {
+        status: newStatus,
+        statusDescription,
+      });
+
+      // Update local report state with new status and timeline
+      setReport((prev) => {
+        const newStatusUpdate = {
+          status: newStatus,
+          description: statusDescription,
+          timestamp: new Date(),
+        };
+
+        const statusUpdates = [...(prev.statusUpdates || []), newStatusUpdate];
+        return {
+          ...prev,
+          status: newStatus,
+          statusUpdates,
+        };
+      });
     } catch (error) {
       console.error("Error updating status:", error);
       setError("Failed to update status. Please try again.");
     } finally {
       setUpdating(false);
+    }
+  };
+
+  const getStatusDescription = (status) => {
+    switch (status) {
+      case REPORT_STATUSES.PENDING:
+        return "Report is pending review";
+      case REPORT_STATUSES.UNDER_VERIFICATION:
+        return "Report is under verification process";
+      case REPORT_STATUSES.VERIFIED:
+        return "Report has been verified";
+      case REPORT_STATUSES.ACTION_TAKEN:
+        return "Action has been taken on the report";
+      case REPORT_STATUSES.RESOLVED:
+        return "Report has been resolved successfully";
+      case REPORT_STATUSES.REJECTED:
+        return "Report has been rejected";
+      default:
+        return `Status updated to ${status}`;
+    }
+  };
+
+  const getStatusBadgeColor = (status) => {
+    switch (status) {
+      case REPORT_STATUSES.RESOLVED:
+        return "bg-green-500";
+      case REPORT_STATUSES.REJECTED:
+        return "bg-red-500";
+      case REPORT_STATUSES.ACTION_TAKEN:
+        return "bg-purple-500";
+      case REPORT_STATUSES.VERIFIED:
+        return "bg-blue-500";
+      case REPORT_STATUSES.UNDER_VERIFICATION:
+        return "bg-yellow-500";
+      default:
+        return "bg-gray-500";
     }
   };
 
@@ -141,7 +208,13 @@ const ReportDetail = () => {
           </div>
           <p className="mt-1 max-w-2xl text-sm text-gray-500">
             Submitted on {report.createdAt.toLocaleDateString()} by{" "}
-            {report.userId || "Anonymous"}
+            {reportUser ? (
+              <span>
+                {reportUser.name} ({reportUser.email})
+              </span>
+            ) : (
+              "Anonymous"
+            )}
           </p>
         </div>
 
@@ -193,14 +266,20 @@ const ReportDetail = () => {
                   <select
                     id="status"
                     name="status"
-                    className="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-sm rounded-md"
+                    className="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-sm rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                     value={newStatus}
                     onChange={(e) => setNewStatus(e.target.value)}
                   >
-                    <option value="pending">Pending</option>
-                    <option value="in_progress">In Progress</option>
-                    <option value="resolved">Resolved</option>
-                    <option value="rejected">Rejected</option>
+                    <option value={REPORT_STATUSES.PENDING}>Pending</option>
+                    <option value={REPORT_STATUSES.UNDER_VERIFICATION}>
+                      Under Verification
+                    </option>
+                    <option value={REPORT_STATUSES.VERIFIED}>Verified</option>
+                    <option value={REPORT_STATUSES.ACTION_TAKEN}>
+                      Action Taken
+                    </option>
+                    <option value={REPORT_STATUSES.RESOLVED}>Resolved</option>
+                    <option value={REPORT_STATUSES.REJECTED}>Rejected</option>
                   </select>
 
                   <button
@@ -215,22 +294,63 @@ const ReportDetail = () => {
               </dd>
             </div>
 
-            <div className="bg-white px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-              <dt className="text-sm font-medium text-gray-500">
+            <div className="bg-white dark:bg-gray-800 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+              <dt className="text-sm font-medium text-gray-500 dark:text-gray-400">
                 Status History
               </dt>
-              <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
-                {report.statusUpdates?.map((update, index) => (
-                  <div key={index} className="mb-2 p-2 bg-gray-50 rounded">
-                    <p className="font-medium">{update.status}</p>
-                    <p className="text-sm text-gray-600">
-                      {update.description}
-                    </p>
-                    <p className="text-xs text-gray-500">
-                      {update.timestamp.toLocaleString()}
-                    </p>
-                  </div>
-                ))}
+              <dd className="mt-1 text-sm text-gray-900 dark:text-gray-300 sm:mt-0 sm:col-span-2">
+                <div className="flow-root">
+                  <ul role="list" className="-mb-8">
+                    {report.statusUpdates?.map((update, index) => (
+                      <li key={index}>
+                        <div className="relative pb-8">
+                          {index !== report.statusUpdates.length - 1 && (
+                            <span
+                              className="absolute top-4 left-4 -ml-px h-full w-0.5 bg-gray-200 dark:bg-gray-700"
+                              aria-hidden="true"
+                            />
+                          )}
+                          <div className="relative flex space-x-3">
+                            <div>
+                              <span
+                                className={`h-8 w-8 rounded-full flex items-center justify-center ring-8 ring-white dark:ring-gray-800 ${getStatusBadgeColor(
+                                  update.status
+                                )}`}
+                              >
+                                <svg
+                                  className="h-5 w-5 text-white"
+                                  viewBox="0 0 20 20"
+                                  fill="currentColor"
+                                >
+                                  <path
+                                    fillRule="evenodd"
+                                    d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                    clipRule="evenodd"
+                                  />
+                                </svg>
+                              </span>
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="font-medium text-gray-900 dark:text-gray-100">
+                                {update.status
+                                  .replace(/_/g, " ")
+                                  .replace(/\b\w/g, (l) => l.toUpperCase())}
+                              </p>
+                              <p className="text-sm text-gray-600 dark:text-gray-400">
+                                {update.description}
+                              </p>
+                              <p className="text-xs text-gray-500 dark:text-gray-500">
+                                {update.timestamp instanceof Date
+                                  ? update.timestamp.toLocaleString()
+                                  : new Date(update.timestamp).toLocaleString()}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               </dd>
             </div>
           </dl>

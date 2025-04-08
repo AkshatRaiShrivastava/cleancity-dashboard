@@ -15,6 +15,15 @@ import {
 } from "firebase/firestore";
 import { db } from "./config";
 
+export const REPORT_STATUSES = {
+  PENDING: "pending",
+  UNDER_VERIFICATION: "under_verification",
+  VERIFIED: "verified",
+  ACTION_TAKEN: "action_taken",
+  RESOLVED: "resolved",
+  REJECTED: "rejected",
+};
+
 // Reports
 export const getReports = async (filters = {}) => {
   try {
@@ -60,9 +69,18 @@ export const getReportById = async (reportId) => {
     }
 
     const reportData = reportDoc.data();
+
+    // Convert timestamps in status updates
+    const statusUpdates =
+      reportData.statusUpdates?.map((update) => ({
+        ...update,
+        timestamp: update.timestamp?.toDate() || new Date(),
+      })) || [];
+
     return {
       id: reportDoc.id,
       ...reportData,
+      statusUpdates,
       createdAt: reportData.createdAt?.toDate() || new Date(),
       updatedAt: reportData.updatedAt?.toDate() || new Date(),
     };
@@ -75,11 +93,52 @@ export const getReportById = async (reportId) => {
 export const updateReport = async (reportId, data) => {
   try {
     const reportRef = doc(db, "reports", reportId);
+    const reportSnap = await getDoc(reportRef);
 
+    if (!reportSnap.exists()) {
+      throw new Error("Report not found");
+    }
+
+    const reportData = reportSnap.data();
+
+    // Update the report first
     await updateDoc(reportRef, {
       ...data,
-      updatedAt: Timestamp.now(),
+      updatedAt: serverTimestamp(),
     });
+
+    // Add status update to history
+    if (data.status && data.status !== reportData.status) {
+      const statusUpdates = reportData.statusUpdates || [];
+      statusUpdates.push({
+        status: data.status,
+        timestamp: serverTimestamp(), // Use serverTimestamp instead of Timestamp.now()
+        description:
+          data.statusDescription || `Report marked as ${data.status}`,
+      });
+
+      await updateDoc(reportRef, {
+        statusUpdates,
+      });
+    }
+
+    // If status is being changed to resolved, update user's incentives
+    if (
+      data.status === REPORT_STATUSES.RESOLVED &&
+      reportData.status !== REPORT_STATUSES.RESOLVED &&
+      reportData.userId
+    ) {
+      const userRef = doc(db, "users", reportData.userId);
+      const userSnap = await getDoc(userRef);
+
+      if (userSnap.exists()) {
+        const currentIncentives = userSnap.data().incentives || 0;
+        await updateDoc(userRef, {
+          incentives: currentIncentives + 25,
+          updatedAt: Timestamp.now(),
+        });
+      }
+    }
 
     return { success: true };
   } catch (error) {
@@ -151,16 +210,12 @@ export const getUsers = async () => {
 export const getUserById = async (userId) => {
   try {
     const userDoc = await getDoc(doc(db, "users", userId));
-
     if (!userDoc.exists()) {
-      throw new Error("User not found");
+      return null;
     }
-
-    const userData = userDoc.data();
     return {
       id: userDoc.id,
-      ...userData,
-      createdAt: userData.createdAt?.toDate() || new Date(),
+      ...userDoc.data(),
     };
   } catch (error) {
     console.error("Error fetching user:", error);
@@ -194,37 +249,39 @@ export const updateUserStatus = async (userId, isActive) => {
 // Dashboard stats
 export const getDashboardStats = async () => {
   try {
-    // Get total reports count
     const reportsSnapshot = await getDocs(collection(db, "reports"));
     const totalReports = reportsSnapshot.size;
 
-    // Get reports by status
-    const pendingQuery = query(
-      collection(db, "reports"),
-      where("status", "==", "pending")
-    );
-    const inProgressQuery = query(
-      collection(db, "reports"),
-      where("status", "==", "in_progress")
-    );
-    const resolvedQuery = query(
-      collection(db, "reports"),
-      where("status", "==", "resolved")
+    // Get reports by all statuses
+    const statusQueries = await Promise.all(
+      Object.values(REPORT_STATUSES).map(async (status) => {
+        const statusQuery = query(
+          collection(db, "reports"),
+          where("status", "==", status)
+        );
+        const snapshot = await getDocs(statusQuery);
+        return { [status]: snapshot.size };
+      })
     );
 
-    const pendingSnapshot = await getDocs(pendingQuery);
-    const inProgressSnapshot = await getDocs(inProgressQuery);
-    const resolvedSnapshot = await getDocs(resolvedQuery);
+    const statusCounts = statusQueries.reduce(
+      (acc, curr) => ({ ...acc, ...curr }),
+      {}
+    );
 
     // Get total users count
     const usersSnapshot = await getDocs(collection(db, "users"));
 
     return {
       totalReports,
-      pendingReports: pendingSnapshot.size,
-      inProgressReports: inProgressSnapshot.size,
-      resolvedReports: resolvedSnapshot.size,
       totalUsers: usersSnapshot.size,
+      pendingReports: statusCounts[REPORT_STATUSES.PENDING] || 0,
+      underVerificationReports:
+        statusCounts[REPORT_STATUSES.UNDER_VERIFICATION] || 0,
+      verifiedReports: statusCounts[REPORT_STATUSES.VERIFIED] || 0,
+      actionTakenReports: statusCounts[REPORT_STATUSES.ACTION_TAKEN] || 0,
+      resolvedReports: statusCounts[REPORT_STATUSES.RESOLVED] || 0,
+      rejectedReports: statusCounts[REPORT_STATUSES.REJECTED] || 0,
     };
   } catch (error) {
     console.error("Error fetching dashboard stats:", error);
