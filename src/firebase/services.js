@@ -106,23 +106,37 @@ export const updateReport = async (reportId, data) => {
       const statusUpdates = reportData.statusUpdates || [];
       const newStatusUpdate = {
         status: data.status,
-        timestamp: Timestamp.now(), // Use Timestamp.now() for array items
+        timestamp: Timestamp.now(),
         description:
           data.statusDescription || `Report marked as ${data.status}`,
       };
 
-      // First update the status updates array
+      // Update status updates array
       await updateDoc(reportRef, {
         statusUpdates: [...statusUpdates, newStatusUpdate],
       });
+
+      // Add incentive if status is changed to resolved
+      if (data.status === REPORT_STATUSES.RESOLVED && reportData.userId) {
+        const userRef = doc(db, "users", reportData.userId);
+        const userSnap = await getDoc(userRef);
+
+        if (userSnap.exists()) {
+          const currentIncentives = userSnap.data().incentives || 0;
+          await updateDoc(userRef, {
+            incentives: currentIncentives + 25,
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
     }
 
-    // Then update the main document
+    // Update the main document
     await updateDoc(reportRef, {
       ...data,
-      updatedAt: serverTimestamp(), // Use serverTimestamp() for top-level fields
+      updatedAt: serverTimestamp(),
     });
-    
+
     return { success: true };
   } catch (error) {
     console.error("Error updating report:", error);
