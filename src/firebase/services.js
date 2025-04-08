@@ -122,13 +122,7 @@ export const updateReport = async (reportId, data) => {
       ...data,
       updatedAt: serverTimestamp(), // Use serverTimestamp() for top-level fields
     });
-    if (userSnap.exists()) {
-      const currentIncentives = userSnap.data().incentives || 0;
-      await updateDoc(userRef, {
-        incentives: currentIncentives + 25,
-        updatedAt: Timestamp.now(),
-      });
-    }
+    
     return { success: true };
   } catch (error) {
     console.error("Error updating report:", error);
